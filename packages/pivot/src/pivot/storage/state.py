@@ -6,6 +6,7 @@ import logging
 import os
 import pathlib
 import struct
+import threading
 import time
 from typing import TYPE_CHECKING, Self
 
@@ -43,6 +44,34 @@ _MAX_KEY_SIZE = 511
 _DB_FULL_MSG = (
     f"State cache is full ({_MAP_SIZE // (1024**3)}GB limit). Delete .pivot/state.lmdb/ to reset."
 )
+
+
+# LMDB must not open the same environment twice in one process (py-lmdb >= 2.0
+# raises "already open in this process"), so StateDB instances on the same path
+# share one reference-counted environment. Readonly is enforced by StateDB itself.
+_shared_envs: dict[pathlib.Path, tuple[lmdb.Environment, int]] = {}
+_shared_envs_lock = threading.Lock()
+os.register_at_fork(after_in_child=_shared_envs.clear)
+
+
+def _acquire_env(lmdb_path: pathlib.Path) -> lmdb.Environment:
+    with _shared_envs_lock:
+        if lmdb_path in _shared_envs:
+            env, refcount = _shared_envs[lmdb_path]
+        else:
+            env, refcount = lmdb.open(str(lmdb_path), map_size=_MAP_SIZE), 0
+        _shared_envs[lmdb_path] = (env, refcount + 1)
+        return env
+
+
+def _release_env(lmdb_path: pathlib.Path) -> None:
+    with _shared_envs_lock:
+        env, refcount = _shared_envs[lmdb_path]
+        if refcount > 1:
+            _shared_envs[lmdb_path] = (env, refcount - 1)
+        else:
+            del _shared_envs[lmdb_path]
+            env.close()
 
 
 class StateDBError(Exception):
@@ -161,6 +190,7 @@ class StateDB:
     """
 
     _env: lmdb.Environment
+    _lmdb_path: pathlib.Path
     _closed: bool
     _readonly: bool
     _write_timeout: float
@@ -172,14 +202,11 @@ class StateDB:
         readonly: bool = False,
         write_timeout: float = 30.0,
     ) -> None:
-        lmdb_path = state_dir / "state.lmdb"
         state_dir.mkdir(parents=True, exist_ok=True)
+        lmdb_path = (state_dir / "state.lmdb").resolve()
 
-        # LMDB readonly mode can't create database - create empty one first if needed
-        if readonly and not lmdb_path.exists():
-            lmdb.open(str(lmdb_path), map_size=_MAP_SIZE).close()
-
-        self._env = lmdb.open(str(lmdb_path), map_size=_MAP_SIZE, readonly=readonly)
+        self._env = _acquire_env(lmdb_path)
+        self._lmdb_path = lmdb_path
         self._closed = False
         self._readonly = readonly
         self._write_timeout = write_timeout
@@ -853,7 +880,7 @@ class StateDB:
     def close(self) -> None:
         """Close the database."""
         if not self._closed:
-            self._env.close()
+            _release_env(self._lmdb_path)
             self._closed = True
 
     def _check_capacity_warning(self) -> None:

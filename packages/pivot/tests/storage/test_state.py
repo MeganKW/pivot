@@ -736,6 +736,21 @@ def test_readonly_allows_reads(tmp_path: pathlib.Path) -> None:
         assert db.remote_hash_exists("origin", "remote_hash")
 
 
+def test_concurrent_instances_on_same_path(tmp_path: pathlib.Path) -> None:
+    """Multiple StateDBs on one path can be open at once in a process (#465)."""
+    db_path = tmp_path
+    test_file = tmp_path / "file.txt"
+    test_file.write_text("content")
+    file_stat = test_file.stat()
+
+    with state.StateDB(db_path, readonly=True) as reader:
+        with state.StateDB(db_path) as writer:
+            writer.save(test_file, file_stat, "hash123")
+            with state.StateDB(db_path, readonly=True) as second_reader:
+                assert second_reader.get(test_file, file_stat) == "hash123"
+        assert reader.get(test_file, file_stat) == "hash123"
+
+
 def test_readonly_blocks_save(tmp_path: pathlib.Path) -> None:
     """Readonly mode blocks save operation."""
     db_path = tmp_path
