@@ -25,35 +25,70 @@ from pivot import ast_utils, exceptions, fingerprint
 from pivot.storage import state as state_mod
 
 
+class _HelperHashModel(BaseModel):
+    items: frozenset[str]
+
+
 @pytest.mark.parametrize(
     ("input", "expected_output"),
     [
         pytest.param(
             (("all", frozenset({"tasks", "runs", "models"})),),
-            [["all", 'frozenset(["models", "runs", "tasks"])']],
+            ["tuple", [["tuple", ["all", ["frozenset", ["models", "runs", "tasks"]]]]]],
             id="tuple-frozenset",
         ),
         pytest.param(
             {"items": [{"b", "a"}]},
-            {"items": ['set(["a", "b"])']},
+            ["dict", [["items", ["list", [["set", ["a", "b"]]]]]]],
             id="dict-list-set",
         ),
         pytest.param(
             frozenset({frozenset({"b", "a"}), ("b", "a")}),
-            ['frozenset(["a", "b"])', ["b", "a"]],
+            ["frozenset", [["frozenset", ["a", "b"]], ["tuple", ["b", "a"]]]],
             id="nested-frozenset",
         ),
         pytest.param(
             ({"b", "a"}, frozenset({"b", "a"}), ["a", "b"]),
-            ['set(["a", "b"])', 'frozenset(["a", "b"])', ["a", "b"]],
+            ["tuple", [["set", ["a", "b"]], ["frozenset", ["a", "b"]], ["list", ["a", "b"]]]],
             id="distinct-nested-types",
         ),
-        pytest.param(frozenset({1, "1"}), [1, "1"], id="mixed-types"),
-        pytest.param((set(), frozenset()), ["set([])", "frozenset([])"], id="empty"),
+        pytest.param(frozenset({1, "1"}), ["frozenset", ["1", 1]], id="mixed-types"),
+        pytest.param((set(), frozenset()), ["tuple", [["set", []], ["frozenset", []]]], id="empty"),
+        pytest.param([set()], ["list", [["set", []]]], id="nested-empty-set"),
+        pytest.param(["set([])"], ["list", ["set([])"]], id="set-marker-string"),
+        pytest.param([frozenset()], ["list", [["frozenset", []]]], id="nested-empty-frozenset"),
+        pytest.param(["frozenset([])"], ["list", ["frozenset([])"]], id="frozenset-marker-string"),
+        pytest.param(
+            [["set", []]], ["list", [["list", ["set", ["list", []]]]]], id="set-marker-list"
+        ),
+        pytest.param(
+            [("set", [])], ["list", [["tuple", ["set", ["list", []]]]]], id="set-marker-tuple"
+        ),
+        pytest.param(
+            [{"set": []}],
+            ["list", [["dict", [["set", ["list", []]]]]]],
+            id="set-marker-dict",
+        ),
+        pytest.param({"b": 2, "a": 1}, ["dict", [["a", 1], ["b", 2]]], id="dict-order"),
+        pytest.param(
+            {1: "int", "1": "str"}, ["dict", [["1", "str"], [1, "int"]]], id="dict-key-types"
+        ),
+        pytest.param([b"a", "b'a'"], ["list", [["bytes", "b'a'"], "b'a'"]], id="bytes-and-string"),
+        pytest.param([None, True, 1, 1.0], ["list", [None, True, 1, 1.0]], id="primitives"),
+        pytest.param(
+            _HelperHashModel(items=frozenset({"b", "a"})),
+            ["dict", [["items", ["frozenset", ["a", "b"]]]]],
+            id="pydantic-model",
+        ),
+        pytest.param(
+            [_HelperHashModel(items=frozenset({"b", "a"}))],
+            ["list", [["dict", [["items", ["frozenset", ["a", "b"]]]]]]],
+            id="nested-pydantic-model",
+        ),
     ],
 )
 def test_serialize_value_for_hash(input: object, expected_output: object) -> None:
-    assert json.loads(fingerprint._serialize_value_for_hash(input)) == expected_output
+    assert fingerprint._serialize_value_for_hash(input) == json.dumps(expected_output)
 
 
 # --- Module-level helper functions for testing ---
