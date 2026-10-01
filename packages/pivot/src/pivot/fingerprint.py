@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 _PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 3
 _REPR_SIZE_LIMIT = 10_000
 
 _SITE_PACKAGE_PATHS = ("site-packages", "dist-packages")
@@ -1117,7 +1117,7 @@ def _discover_pydantic_field_types(
 def _serialize_value_for_hash(value: Any) -> str:
     """Serialize a value to a stable string for hashing."""
     if hasattr(value, "model_dump"):
-        return json.dumps(value.model_dump(), sort_keys=True, default=str)
+        return json.dumps(value.model_dump(), sort_keys=True, default=_json_default_for_hash)
 
     if isinstance(value, (list, tuple)):
         items: list[Any] = []
@@ -1126,19 +1126,27 @@ def _serialize_value_for_hash(value: Any) -> str:
                 items.append(item.model_dump())
             else:
                 items.append(item)
-        return json.dumps(items, sort_keys=True, default=str)
+        return json.dumps(items, sort_keys=True, default=_json_default_for_hash)
 
     if isinstance(value, (set, frozenset)):
         # Sort for deterministic ordering
         items_to_sort = cast("set[Any] | frozenset[Any]", value)
         return json.dumps(
-            sorted(items_to_sort, key=lambda x: (type(x).__name__, str(x))), default=str
+            sorted(items_to_sort, key=lambda x: (type(x).__name__, _serialize_value_for_hash(x))),
+            default=_json_default_for_hash,
         )
 
     if isinstance(value, dict):
-        return json.dumps(value, sort_keys=True, default=str)
+        return json.dumps(value, sort_keys=True, default=_json_default_for_hash)
 
     return repr(value)
+
+
+def _json_default_for_hash(value: Any) -> str:
+    if isinstance(value, (set, frozenset)):
+        items = cast("set[Any] | frozenset[Any]", value)
+        return f"{type(items).__name__}({_serialize_value_for_hash(items)})"
+    return str(value)
 
 
 def _process_collection_dependency(

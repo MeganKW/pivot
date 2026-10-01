@@ -24,6 +24,38 @@ from pydantic import BaseModel
 from pivot import ast_utils, exceptions, fingerprint
 from pivot.storage import state as state_mod
 
+
+@pytest.mark.parametrize(
+    ("input", "expected_output"),
+    [
+        pytest.param(
+            (("all", frozenset({"tasks", "runs", "models"})),),
+            [["all", 'frozenset(["models", "runs", "tasks"])']],
+            id="tuple-frozenset",
+        ),
+        pytest.param(
+            {"items": [{"b", "a"}]},
+            {"items": ['set(["a", "b"])']},
+            id="dict-list-set",
+        ),
+        pytest.param(
+            frozenset({frozenset({"b", "a"}), ("b", "a")}),
+            ['frozenset(["a", "b"])', ["b", "a"]],
+            id="nested-frozenset",
+        ),
+        pytest.param(
+            ({"b", "a"}, frozenset({"b", "a"}), ["a", "b"]),
+            ['set(["a", "b"])', 'frozenset(["a", "b"])', ["a", "b"]],
+            id="distinct-nested-types",
+        ),
+        pytest.param(frozenset({1, "1"}), [1, "1"], id="mixed-types"),
+        pytest.param((set(), frozenset()), ["set([])", "frozenset([])"], id="empty"),
+    ],
+)
+def test_serialize_value_for_hash(input: object, expected_output: object) -> None:
+    assert json.loads(fingerprint._serialize_value_for_hash(input)) == expected_output
+
+
 # --- Module-level helper functions for testing ---
 # These must be at module level to properly capture imports in their closures
 
